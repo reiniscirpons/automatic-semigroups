@@ -19,7 +19,7 @@ p = Presentation([0, 1])
 presentation.add_rule(p, [0, 1], [1, 0])
 
 tc = ToddCoxeter(congruence_kind.twosided, p)
-tc.run_until(lambda: tc.number_of_nodes_active() > 50)
+tc.run_until(lambda: tc.number_of_nodes_active() > 20)
 tc.shrink_to_fit()
 A = tc.current_word_graph()
 
@@ -98,7 +98,11 @@ class QuotientWordGraph:
 
 
 def follow_path(wg: QuotientWordGraph, s: int, w: tuple[int, ...]) -> int:
-    return word_graph.follow_path(wg._wg, s, w)
+    for a in w:
+        if s == UNDEFINED:
+            return s
+        s = wg.target(s, a)
+    return s
 
 
 def accepts(A: WordGraph, w: tuple[int, ...]):
@@ -150,6 +154,9 @@ def merge_nodes(wg: QuotientWordGraph, node1: int, node2: int) -> WordGraph:
                     wg.set_target(node1, letter, wg.target(node2, letter))
                 else:
                     kappa.append((wg.target(node1, letter), wg.target(node2, letter)))
+        print(
+            f"quotienting by ({node1}, {node2}) = ({wg._uf.find(node1)}, {wg._uf.find(node2)}), number of nodes is {wg._uf.number_of_blocks() - 1}"
+        )
         wg.merge_nodes(node1, node2)
 
 
@@ -169,13 +176,13 @@ def word_difference_automata(A: WordGraph, L: WordGraph, a: int, k: int) -> Word
     def label(b: int, c: int) -> int:
         return b * (A.out_degree() + 1) + c
 
-    def def_edge(wg: QuotientWordGraph, s: int, a: int, t: int) -> None:
+    def def_edge(wg: QuotientWordGraph, s: int, x: int, t: int) -> None:
         if max(s, t) >= wg.number_of_nodes():
             wg.add_nodes(max(s, t) - wg.number_of_nodes() + 1)
-        if wg.target(s, a) != UNDEFINED and wg.target(s, a) != t:
-            print(f"quotienting by ({t}, {wg.target(s, a)})")
-            merge_nodes(wg, t, wg.target(s, a))
-        wg.set_target(s, a, t)
+        if wg.target(s, x) != UNDEFINED and wg.target(s, x) != t:
+            merge_nodes(wg, t, wg.target(s, x))
+        else:
+            wg.set_target(s, x, t)
 
     L_lang = Paths(L).source(0).max(k)
     alphabet = list(range(A.out_degree()))
