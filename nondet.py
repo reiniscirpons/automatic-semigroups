@@ -4,6 +4,15 @@ from itertools import chain
 from typing import Iterable, Callable, Iterator
 from dataclasses import dataclass
 import graphviz
+from libsemigroups_pybind11 import (
+    UNDEFINED,
+    ToddCoxeter,
+    Presentation,
+    congruence_kind,
+    presentation,
+)
+from warnings import warn
+from datetime import timedelta
 
 type Vertex = int
 type Word[Letter] = Iterable[Letter]
@@ -270,25 +279,29 @@ def compute_sim_fingerprint[T](
         for t in all_words_of_length_up_to_k:
             us = tuple(concatenate_words(u, s))
             vt = tuple(concatenate_words(v, t))
-            vta = vt
+            usa = us
             if a != padding_symbol:
-                vta = tuple(append_letter(vt, a))
-            reach_us = cayley_ball.follow(0, us, padding_symbol)
-            if len(reach_us) == 0:
-                raise RuntimeError(f"Ball is too small, us={us} fell out!")
-            reach_vta = cayley_ball.follow(0, vta, padding_symbol)
-            if len(reach_vta) == 0:
-                raise RuntimeError(f"Ball is too small, vta={vta} fell out!")
+                usa = tuple(append_letter(us, a))
+            reach_usa = cayley_ball.follow(0, usa, padding_symbol)
+            if len(reach_usa) == 0:
+                warn(f"Ball is too small, usa={usa} fell out!", RuntimeWarning)
+                result.append(False)
+                continue
+            reach_vt = cayley_ball.follow(0, vt, padding_symbol)
+            if len(reach_vt) == 0:
+                warn(f"Ball is too small, vt={vt} fell out!", RuntimeWarning)
+                result.append(False)
+                continue
             result.append(
                 rep_automaton.accepts(us, padding_symbol)
                 and rep_automaton.accepts(vt, padding_symbol)
-                and len(reach_us & reach_vta) != 0
+                and len(reach_usa & reach_vt) != 0
             )
     return tuple(result)
 
 
 k_1 = 2
-k_2 = k_1 * k_1
+k_2 = 2 * k_1
 alphabet = "ab"
 padding_symbol = "$"
 padded_alphabet = alphabet + padding_symbol
@@ -363,10 +376,10 @@ def compute_multiplication_automaton[T](
     final_states = set()
     for u in rep_automaton.language(k_1):
         for v in rep_automaton.language(k_1):
-            va = tuple(append_letter(v, a))
-            reach_u = cayley_ball.follow(0, u, padding_symbol)
-            reach_va = cayley_ball.follow(0, va, padding_symbol)
-            if len(reach_u & reach_va) != 0:
+            ua = tuple(append_letter(u, a))
+            reach_ua = cayley_ball.follow(0, ua, padding_symbol)
+            reach_v = cayley_ball.follow(0, v, padding_symbol)
+            if len(reach_ua & reach_v) != 0:
                 pp_temp = compute_sim_fingerprint(
                     u,
                     v,
@@ -419,7 +432,7 @@ multiplication_automata = {
 # print(multiplication_automata["$"].initial_state)
 # print(multiplication_automata["$"].final_states)
 
-multiplication_automata["a"].word_graph.dot().view()
+# multiplication_automata["a"].word_graph.dot().view()
 print(multiplication_automata["a"].word_graph)
 print(multiplication_automata["a"].initial_state)
 print(multiplication_automata["a"].final_states)
@@ -436,7 +449,9 @@ def direct_product_automaton[T](
     )
     result = NondeterministicWordGraph(padded_pair_alphabet)
     state_pair_to_index: dict[tuple[Vertex | None, Vertex | None], Vertex] = {}
-    que = [(automaton.initial_state, automaton.initial_state)]
+    que: list[tuple[Vertex | None, Vertex | None]] = [
+        (automaton.initial_state, automaton.initial_state)
+    ]
     state_pair_to_index[(automaton.initial_state, automaton.initial_state)] = (
         result.new_node()
     )
@@ -472,8 +487,346 @@ def direct_product_automaton[T](
 
             for new_state_1 in new_states_1:
                 for new_state_2 in new_states_2:
-                    if (new_state_1, new_state_2) not in pair_to_index:
-                        pair_to_index[(new_state_1, new_state_2)] = result.new_node()
-                        # TODO: finish
+                    if (new_state_1, new_state_2) not in state_pair_to_index:
+                        state_pair_to_index[(new_state_1, new_state_2)] = (
+                            result.new_node()
+                        )
+                        que.append((new_state_1, new_state_2))
+                    target = state_pair_to_index[(new_state_1, new_state_2)]
+                    result.add_edge(source, (b, c), target)
         i += 1
-    return result
+
+    return NondeterministicAutomaton(
+        result,
+        state_pair_to_index[(automaton.initial_state, automaton.initial_state)],
+        set(
+            state_pair_to_index[(state_1, state_2)]
+            for state_1 in chain(automaton.final_states, (None,))
+            for state_2 in chain(automaton.final_states, (None,))
+            if state_1 is not None or state_2 is not None
+        ),
+    )
+
+
+def deinterleave_word[T](pair_word: Iterable[tuple[T, T]]) -> tuple[Word[T], Word[T]]:
+    return (tuple(a for a, _ in pair_word), tuple(a for _, a in pair_word))
+
+
+rep_pair_automaton = direct_product_automaton(W, "$")
+assert tuple(
+    map(
+        lambda w: tuple("".join(x) for x in deinterleave_word(w)),
+        rep_pair_automaton.language(2),
+    )
+) == (
+    ("", ""),
+    ("a", "a"),
+    ("a", "b"),
+    ("a", "$"),
+    ("b", "a"),
+    ("b", "b"),
+    ("b", "$"),
+    ("$", "a"),
+    ("$", "b"),
+    ("aa", "aa"),
+    ("aa", "ab"),
+    ("aa", "a$"),
+    ("ab", "aa"),
+    ("ab", "ab"),
+    ("ab", "a$"),
+    ("a$", "aa"),
+    ("a$", "ab"),
+    ("aa", "bb"),
+    ("aa", "b$"),
+    ("ab", "bb"),
+    ("ab", "b$"),
+    ("a$", "bb"),
+    ("aa", "$$"),
+    ("ab", "$$"),
+    ("bb", "aa"),
+    ("bb", "ab"),
+    ("bb", "a$"),
+    ("b$", "aa"),
+    ("b$", "ab"),
+    ("bb", "bb"),
+    ("bb", "b$"),
+    ("b$", "bb"),
+    ("bb", "$$"),
+    ("$$", "aa"),
+    ("$$", "ab"),
+    ("$$", "bb"),
+)
+
+
+def automaton_intersection[T](
+    automaton1: NondeterministicAutomaton[T], automaton2: NondeterministicAutomaton[T]
+) -> NondeterministicAutomaton[T]:
+    assert set(automaton1.word_graph.alphabet) == set(automaton2.word_graph.alphabet)
+    result = NondeterministicWordGraph(automaton1.word_graph.alphabet)
+    state_pair_to_index: dict[tuple[Vertex, Vertex], Vertex] = {}
+    que: list[tuple[Vertex, Vertex]] = [
+        (automaton1.initial_state, automaton1.initial_state)
+    ]
+    state_pair_to_index[(automaton1.initial_state, automaton1.initial_state)] = (
+        result.new_node()
+    )
+    i = 0
+    while i < len(que):
+        state1, state2 = que[i]
+        source = state_pair_to_index[(state1, state2)]
+        for letter in result.alphabet:
+            for new_state_1 in automaton1.word_graph.targets(state1, letter):
+                for new_state_2 in automaton2.word_graph.targets(state2, letter):
+                    if (new_state_1, new_state_2) not in state_pair_to_index:
+                        state_pair_to_index[(new_state_1, new_state_2)] = (
+                            result.new_node()
+                        )
+                        que.append((new_state_1, new_state_2))
+                    target = state_pair_to_index[(new_state_1, new_state_2)]
+                    result.add_edge(source, letter, target)
+        i += 1
+    return NondeterministicAutomaton(
+        result,
+        state_pair_to_index[(automaton1.initial_state, automaton2.initial_state)],
+        set(
+            state_pair_to_index[(state_1, state_2)]
+            for state_1 in automaton1.final_states
+            for state_2 in automaton2.final_states
+            if (state_1, state_2) in state_pair_to_index
+        ),
+    )
+
+
+intersection_W_ab_star = automaton_intersection(W, total_automaton)
+print(tuple("".join(w) for w in intersection_W_ab_star.language(2)))
+
+
+for letter in padded_alphabet:
+    multiplication_automata[letter] = automaton_intersection(
+        multiplication_automata[letter], rep_pair_automaton
+    )
+
+# multiplication_automata["a"].word_graph.dot().view()
+print(multiplication_automata["a"].word_graph)
+print(multiplication_automata["a"].initial_state)
+print(multiplication_automata["a"].final_states)
+
+
+def trim_automaton[T](
+    automaton: NondeterministicAutomaton[T],
+) -> NondeterministicAutomaton[T]:
+    rev: list[dict[T, list[Vertex]]] = [
+        {letter: [] for letter in automaton.word_graph.alphabet}
+        for _ in automaton.word_graph.vertices
+    ]
+    for source in automaton.word_graph.vertices:
+        for letter in automaton.word_graph.alphabet:
+            for target in automaton.word_graph.targets(source, letter):
+                rev[target][letter].append(source)
+
+    que = list(automaton.final_states)
+    seen = set()
+    i = 0
+    while i < len(que):
+        state = que[i]
+        for letter in automaton.word_graph.alphabet:
+            for target in rev[state][letter]:
+                if target not in seen:
+                    que.append(target)
+                    seen.add(target)
+        i += 1
+
+    final_reachable_set = set(que)
+    assert automaton.initial_state in final_reachable_set
+    result = NondeterministicWordGraph(automaton.word_graph.alphabet)
+    state_to_index = {}
+    state_to_index[automaton.initial_state] = result.new_node()
+    que = [automaton.initial_state]
+    i = 0
+    while i < len(que):
+        source = que[i]
+        for letter in automaton.word_graph.alphabet:
+            for target in automaton.word_graph.targets(source, letter):
+                if target not in final_reachable_set:
+                    continue
+                if target not in state_to_index:
+                    state_to_index[target] = result.new_node()
+                    que.append(target)
+                result.add_edge(state_to_index[source], letter, state_to_index[target])
+        i += 1
+    return NondeterministicAutomaton(
+        result,
+        state_to_index[automaton.initial_state],
+        {state_to_index[state] for state in automaton.final_states},
+    )
+
+
+# trim_automaton(multiplication_automata["a"]).word_graph.dot().view()
+for letter in padded_alphabet:
+    multiplication_automata[letter] = trim_automaton(multiplication_automata[letter])
+
+# multiplication_automata["b"].word_graph.dot().view()
+print(multiplication_automata["b"].word_graph)
+print(multiplication_automata["b"].initial_state)
+print(multiplication_automata["b"].final_states)
+
+
+def construct_reduced_multiplication_automata[T](
+    alphabet: Iterable[T],
+    padding_symbol: T,
+    k_1: int,
+    k_2: int,
+    ball: NondeterministicWordGraph[T],
+    rep_automaton: NondeterministicAutomaton[T],
+) -> dict[T, NondeterministicAutomaton[tuple[T, T]]]:
+    padded_alphabet = tuple(append_letter(alphabet, padding_symbol))
+    multiplication_automata = {
+        a: compute_multiplication_automaton(
+            alphabet, a, k_1, k_2, rep_automaton, ball, padding_symbol
+        )
+        for a in padded_alphabet
+    }
+    rep_pair_automaton = direct_product_automaton(rep_automaton, padding_symbol)
+    for letter in padded_alphabet:
+        multiplication_automata[letter] = automaton_intersection(
+            multiplication_automata[letter], rep_pair_automaton
+        )
+    for letter in padded_alphabet:
+        multiplication_automata[letter] = trim_automaton(
+            multiplication_automata[letter]
+        )
+    return multiplication_automata
+
+
+# alphabet = "ab"
+# k_1 = 2
+# k_2 = k_1 * k_1
+# rep_word_graph = NondeterministicWordGraph(alphabet)
+# rep_word_graph.new_node()
+# rep_word_graph.new_node()
+# rep_word_graph.add_edge(0, "a", 0)
+# rep_word_graph.add_edge(0, "b", 1)
+# rep_word_graph.add_edge(1, "b", 1)
+# rep_automaton = NondeterministicAutomaton(rep_word_graph, 0, {0, 1})
+# multiplication_automata = construct_reduced_multiplication_automata(
+#     "ab",
+#     "$",
+#     k_1,
+#     k_2,
+#     cayley_graph_ball(
+#         alphabet, free_commutative_monoid_word_problem_oracle, k_1 + k_2 + 2
+#     ),
+#     rep_automaton,
+# )
+
+# multiplication_automata["a"].word_graph.dot().view()
+# print(multiplication_automata["a"].word_graph)
+# print(multiplication_automata["a"].initial_state)
+# print(multiplication_automata["a"].final_states)
+
+
+def todd_coxeter_to_nondet_word_graph[T](
+    alphabet: Iterable[T], tc: ToddCoxeter
+) -> NondeterministicWordGraph[T]:
+    tcwg = tc.current_word_graph()
+    wg = NondeterministicWordGraph(alphabet)
+    letter_to_index = {letter: idx for idx, letter in enumerate(alphabet)}
+    for _ in range(tcwg.number_of_nodes()):
+        # assumes nodes homogeneous
+        wg.new_node()
+    # assumes initial node 0
+    for vertex in tcwg.nodes():
+        for letter in alphabet:
+            target = tcwg.target(vertex, letter_to_index[letter])
+            if target != UNDEFINED:
+                wg.add_edge(vertex, letter, target)
+    return wg
+
+
+# alphabet = "ab"
+# k_1 = 4
+# k_2 = 8
+# rep_word_graph = NondeterministicWordGraph(alphabet)
+# rep_word_graph.new_node()
+# rep_word_graph.new_node()
+# rep_word_graph.new_node()
+# rep_word_graph.add_edge(0, "a", 0)
+# rep_word_graph.add_edge(0, "b", 1)
+# rep_word_graph.add_edge(1, "b", 1)
+# rep_word_graph.add_edge(1, "a", 2)
+# rep_word_graph.add_edge(2, "a", 0)
+# rep_automaton = NondeterministicAutomaton(rep_word_graph, 0, {0, 1, 2})
+# relations = [("aba", "bab")]
+#
+#
+# p = Presentation(alphabet)
+# presentation.add_rule(p, "aba", "bab")
+# tc = ToddCoxeter(word=str)
+# tc.init(congruence_kind.twosided, p)
+# tc.strategy(tc.options.strategy.felsch)
+# tc.run_until(lambda: tc.number_of_nodes_active() > 10000)
+#
+#
+# ball = todd_coxeter_to_nondet_word_graph(alphabet, tc)
+# multiplication_automata = construct_reduced_multiplication_automata(
+#     alphabet,
+#     "$",
+#     k_1,
+#     k_2,
+#     ball,
+#     rep_automaton,
+# )
+#
+# multiplication_automata["$"].word_graph.dot().view()
+# print(multiplication_automata["$"].word_graph)
+# print(multiplication_automata["$"].initial_state)
+# print(multiplication_automata["$"].final_states)
+
+alphabet = "abAB"
+k_1 = 1
+k_2 = 1
+rep_word_graph = NondeterministicWordGraph(alphabet)
+rep_word_graph.new_node()
+rep_word_graph.new_node()
+rep_word_graph.new_node()
+rep_word_graph.new_node()
+rep_word_graph.new_node()
+rep_word_graph.add_edge(0, "a", 1)
+rep_word_graph.add_edge(0, "A", 2)
+rep_word_graph.add_edge(1, "a", 1)
+rep_word_graph.add_edge(2, "A", 2)
+rep_word_graph.add_edge(1, "b", 3)
+rep_word_graph.add_edge(1, "B", 4)
+rep_word_graph.add_edge(2, "b", 3)
+rep_word_graph.add_edge(2, "B", 4)
+rep_word_graph.add_edge(3, "b", 3)
+rep_word_graph.add_edge(4, "B", 4)
+rep_automaton = NondeterministicAutomaton(rep_word_graph, 0, {0, 1, 2, 3, 4})
+relations = [("ab", "ba"), ("Aa", ""), ("aA", ""), ("Bb", ""), ("bB", "")]
+p = Presentation(alphabet)
+p.contains_empty_word(True)
+presentation.add_rule(p, "ab", "ba")
+presentation.add_rule(p, "aA", "")
+presentation.add_rule(p, "Aa", "")
+presentation.add_rule(p, "bB", "")
+presentation.add_rule(p, "Bb", "")
+tc = ToddCoxeter(word=str)
+tc.init(congruence_kind.twosided, p)
+tc.strategy(tc.options.strategy.felsch)
+tc.run_until(lambda: tc.number_of_nodes_active() > 1000)
+
+
+ball = todd_coxeter_to_nondet_word_graph(alphabet, tc)
+multiplication_automata = construct_reduced_multiplication_automata(
+    alphabet,
+    "$",
+    k_1,
+    k_2,
+    ball,
+    rep_automaton,
+)
+
+multiplication_automata["$"].word_graph.dot().view()
+print(multiplication_automata["$"].word_graph)
+print(multiplication_automata["$"].initial_state)
+print(multiplication_automata["$"].final_states)
