@@ -123,7 +123,7 @@ def compute_multiplication_automaton(
     k_2: int,
     rep_automaton: Automaton,
     cayley_ball: Word,
-    vertbose: bool = True,
+    verbose: bool = True,
 ):
     word_pair_to_fingerprint: dict = {}
     multiplication_wg = WordGraph(0, (alphabet_size + 1) ** 2)
@@ -236,33 +236,34 @@ def compute_multiplication_automaton(
     return multiplication_automaton
 
 
-p = Presentation([0, 1])
-presentation.add_rule(p, (0, 1), (1, 0))
+if __name__ == "__main__":
+    p = Presentation([0, 1])
+    presentation.add_rule(p, (0, 1), (1, 0))
 
-tc = ToddCoxeter(congruence_kind.twosided, p)
-tc.run_for(timedelta(seconds=1))
+    tc = ToddCoxeter(congruence_kind.twosided, p)
+    tc.run_for(timedelta(seconds=1))
 
-wg = WordGraph(2, [[0, 1], [UNDEFINED, 1]])
-automaton = Automaton(wg, 0, frozenset({0, 1}))
+    wg = WordGraph(2, [[0, 1], [UNDEFINED, 1]])
+    automaton = Automaton(wg, 0, frozenset({0, 1}))
 
-# print(
-#     compute_sim_fingerprint(
-#         3, (0,), (0, 1), 1, 2, automaton, tc.current_word_graph(), 2
-#     )
-# )
+    # print(
+    #     compute_sim_fingerprint(
+    #         3, (0,), (0, 1), 1, 2, automaton, tc.current_word_graph(), 2
+    #     )
+    # )
 
-alphabet_size = 2
-k_1 = 3
-k_2 = k_1 * k_1
+    alphabet_size = 2
+    k_1 = 3
+    k_2 = k_1 * k_1
 
-multiplication_automata = [
-    compute_multiplication_automaton(
-        alphabet_size, a, k_1, k_2, automaton, tc.current_word_graph()
-    )
-    for a in range(alphabet_size + 1)
-]
+    multiplication_automata = [
+        compute_multiplication_automaton(
+            alphabet_size, a, k_1, k_2, automaton, tc.current_word_graph()
+        )
+        for a in range(alphabet_size + 1)
+    ]
 
-dot(multiplication_automata[0].word_graph).view()
-print(multiplication_automata[0].word_graph)
-print(multiplication_automata[0].initial_state)
-print(multiplication_automata[0].final_states)
+    dot(multiplication_automata[0].word_graph).view()
+    print(multiplication_automata[0].word_graph)
+    print(multiplication_automata[0].initial_state)
+    print(multiplication_automata[0].final_states)
