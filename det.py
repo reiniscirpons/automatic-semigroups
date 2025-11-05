@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from datetime import timedelta
-from itertools import cycle, islice
+from itertools import cycle, islice, chain
 from typing import Iterator, Iterable
 from warnings import warn
 from libsemigroups_pybind11 import (
     POSITIVE_INFINITY,
     UNDEFINED,
+    Order,
     Paths,
     PositiveInfinity,
     WordGraph,
@@ -51,13 +52,19 @@ class Automaton:
     def language(
         self, max_len: int | PositiveInfinity = POSITIVE_INFINITY
     ) -> Iterator[Word]:
-        paths = [
-            Paths(self.word_graph)
-            .source(self.initial_state)
-            .target(final_state)
-            .max(max_len + 1)
-            for final_state in self.final_states
-        ]
+        paths = []
+        if self.initial_state in self.final_states:
+            paths.append(())
+        paths.extend(
+            [
+                Paths(self.word_graph)
+                .source(self.initial_state)
+                .target(final_state)
+                .max(max_len + 1)
+                .order(Order.lex)
+                for final_state in self.final_states
+            ]
+        )
         return (tuple(word) for word in roundrobin(*(iter(path) for path in paths)))
 
 
@@ -234,6 +241,167 @@ def compute_multiplication_automaton(
         frozenset(final_states),
     )
     return multiplication_automaton
+
+
+def direct_product_automaton(automaton: Automaton) -> Automaton:
+    """Given an automaton for L, return a synchronous automaton for L x L."""
+    alphabet_size = automaton.word_graph.out_degree()
+    result = WordGraph(1, (alphabet_size + 1) ** 2)
+    padding_state = automaton.word_graph.number_of_nodes()
+    que: list[tuple[Vertex, Vertex]] = [
+        (automaton.initial_state, automaton.initial_state)
+    ]
+    state_pair_to_index: dict[tuple[Vertex, Vertex], Vertex] = {
+        (automaton.initial_state, automaton.initial_state): 0
+    }
+    nr_vertices = 1
+
+    i = 0
+    while i < len(que):
+        state1, state2 = que[i]
+        source = state_pair_to_index[(state1, state2)]
+        for b in range(alphabet_size + 1):
+            # If we are in padding state, only proceed via padding symbol,
+            # if we are not in a padding state, we can only accept a padding symbol
+            # if the current state accepts
+            if (state1 == padding_state and b != alphabet_size) or (
+                state1 != padding_state
+                and b == alphabet_size
+                and state1 not in automaton.final_states
+            ):
+                continue
+            # Assume we are transitioning to the padding state
+            new_state1 = padding_state
+            # This if does not trigger if either state1 is the padding state
+            # (in which case we will remain in the padding state)
+            # or if we are not in the padding state and b is a padding symbol
+            # (but this case cannot occur since the previous if did not trigger)
+            if state1 != padding_state and b != alphabet_size:
+                new_state1 = automaton.word_graph.target(state1, b)
+            if new_state1 == UNDEFINED:
+                # Fell off the machine, so one of the two words is wrong
+                continue
+            for c in range(alphabet_size + 1):
+                # Same story as before, but also check we aren't traversing via double padding
+                if (
+                    (state2 == padding_state and c != alphabet_size)
+                    or (
+                        state2 != padding_state
+                        and c == alphabet_size
+                        and state2 not in automaton.final_states
+                    )
+                    or (b == alphabet_size and c == alphabet_size)
+                ):
+                    continue
+                new_state2 = padding_state
+                if state2 != padding_state and c != alphabet_size:
+                    new_state2 = automaton.word_graph.target(state2, c)
+                if new_state2 == UNDEFINED:
+                    continue
+
+                if (new_state1, new_state2) not in state_pair_to_index:
+                    state_pair_to_index[(new_state1, new_state2)] = nr_vertices
+                    que.append((new_state1, new_state2))
+                    result.add_nodes(1)
+                    nr_vertices += 1
+                target = state_pair_to_index[(new_state1, new_state2)]
+                result.target(source, label_from_pair(alphabet_size, b, c), target)
+        i += 1
+
+    return Automaton(
+        result,
+        state_pair_to_index[(automaton.initial_state, automaton.initial_state)],
+        frozenset(
+            state_pair_to_index[(state_1, state_2)]
+            for state_1 in chain(automaton.final_states, (padding_state,))
+            for state_2 in chain(automaton.final_states, (padding_state,))
+            if state_1 != padding_state or state_2 != padding_state
+        ),
+    )
+
+
+# TODO: test this
+def intersection_automaton(automaton1: Automaton, automaton2: Automaton) -> Automaton:
+    assert automaton1.word_graph.out_degree() == automaton2.word_graph.out_degree()
+    alphabet_size = automaton1.word_graph.out_degree()
+    result = WordGraph(1, alphabet_size)
+    state_pair_to_index: dict[tuple[Vertex, Vertex], Vertex] = {
+        (automaton1.initial_state, automaton1.initial_state): 0
+    }
+    que = [(automaton1.initial_state, automaton2.initial_state)]
+    nr_vertices = 1
+    i = 0
+    while i < len(que):
+        state1, state2 = que[i]
+        source = state_pair_to_index[(state1, state2)]
+        for letter in range(alphabet_size):
+            new_state1 = automaton1.word_graph.target(state1, letter)
+            new_state2 = automaton2.word_graph.target(state2, letter)
+            if new_state1 == UNDEFINED or new_state2 == UNDEFINED:
+                continue
+            if (new_state1, new_state2) not in state_pair_to_index:
+                state_pair_to_index[(new_state1, new_state2)] = nr_vertices
+                que.append((new_state1, new_state2))
+                result.add_nodes(1)
+                nr_vertices += 1
+            target = state_pair_to_index[(new_state1, new_state2)]
+            result.target(source, letter, target)
+        i += 1
+
+    return Automaton(
+        result,
+        state_pair_to_index[(automaton1.initial_state, automaton1.initial_state)],
+        frozenset(
+            state_pair_to_index[(state_1, state_2)]
+            for state_1 in automaton1.final_states
+            for state_2 in automaton2.final_states
+            if (state_1, state_2) in state_pair_to_index
+        ),
+    )
+
+
+# TODO: test this
+def trim_automaton(automaton: Automaton) -> Automaton:
+    alphabet_size = automaton.word_graph.out_degree()
+    reverse_reach_graph = [[] for _ in range(automaton.word_graph.number_of_nodes())]
+    for vertex in range(len(reverse_reach_graph)):
+        for letter in range(alphabet_size):
+            target = automaton.word_graph.target(vertex, letter)
+            if target == UNDEFINED:
+                continue
+            reverse_reach_graph[target].append(vertex)
+
+    seen = set(automaton.final_states)
+    que = list(automaton.final_states)
+    i = 0
+    while i < len(que):
+        vertex = que[i]
+        for child in reverse_reach_graph[vertex]:
+            if child not in seen:
+                seen.add(child)
+                que.append(child)
+        i += 1
+
+    assert automaton.initial_state in seen
+    vertex_to_index = {automaton.initial_state: 0}
+    nr_vertices = 1
+    for vertex in que:
+        if vertex not in vertex_to_index:
+            vertex_to_index[vertex] = nr_vertices
+            nr_vertices += 1
+
+    result = WordGraph(nr_vertices, alphabet_size)
+    for vertex in que:
+        for letter in range(alphabet_size):
+            target = automaton.word_graph.target(vertex, letter)
+            if target not in seen:
+                continue
+            result.target(vertex_to_index[vertex], letter, vertex_to_index[target])
+    return Automaton(
+        result,
+        vertex_to_index[automaton.initial_state],
+        frozenset(vertex_to_index[state] for state in automaton.final_states),
+    )
 
 
 if __name__ == "__main__":

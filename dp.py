@@ -12,6 +12,7 @@ Hence we may determine if :math:`(u_1, v_1) \sim_{a, k} (u_2, v_2)`
 by utilizing dynamic programming.
 """
 
+from time import time
 from datetime import timedelta
 from enum import Enum, auto
 from typing import Iterable
@@ -28,7 +29,16 @@ from libsemigroups_pybind11 import (
     todd_coxeter,
 )
 from libsemigroups_pybind11.word_graph import dot
-from det import Automaton, Letter, Vertex, Word
+from det import (
+    Automaton,
+    Letter,
+    Vertex,
+    Word,
+    direct_product_automaton,
+    intersection_automaton,
+    trim_automaton,
+)
+from itertools import chain
 
 
 def label_from_pair(alphabet_size: int, b: Letter, c: Letter) -> Letter:
@@ -82,7 +92,7 @@ def sim_a_0_helper(
     if a != alphabet_size:
         xa = cayley_graph.target(x, a)
         if xa == UNDEFINED:
-            warn(f"Warning, Cayley graph is too small!")
+            warn(f"Warning, Cayley graph is too small! x={x}, a={a}")
     return xa == y
 
 
@@ -235,34 +245,66 @@ def multiplier_automaton(
     )
 
 
-if __name__ == "__main__":
-    p = Presentation([0, 1])
-    presentation.add_rule(p, (0, 1), (1, 0))
+def run_method(p: Presentation, rep_automaton: Automaton):
+    pair_automaton = direct_product_automaton(rep_automaton)
+    alphabet_size = len(p.alphabet())
 
     tc = ToddCoxeter(congruence_kind.twosided, p)
+
+    # TODO: dynamically adjust k_1,  k_2 and ball size
+    tc.strategy(tc.options.strategy.hlt)
     tc.run_for(timedelta(seconds=1))
-
-    wg = WordGraph(2, [[0, 1], [UNDEFINED, 1]])
-    automaton = Automaton(wg, 0, frozenset({0, 1}))
-
-    # print(
-    #     compute_sim_fingerprint(
-    #         3, (0,), (0, 1), 1, 2, automaton, tc.current_word_graph(), 2
-    #     )
-    # )
-
-    alphabet_size = 2
+    tc.strategy(tc.options.strategy.felsch)
+    tc.run_for(timedelta(seconds=1))
+    tc.strategy(tc.options.strategy.hlt)
+    tc.run_for(timedelta(seconds=1))
+    tc.strategy(tc.options.strategy.felsch)
+    tc.run_for(timedelta(seconds=1))
     k_1 = 50
-    k_2 = 6
+    k_2 = 7
 
     memo = {}
     multiplication_automata = [
-        multiplier_automaton(a, k_1, k_2, automaton, tc.current_word_graph(), memo)
+        trim_automaton(
+            intersection_automaton(
+                multiplier_automaton(
+                    a, k_1, k_2, rep_automaton, tc.current_word_graph(), memo
+                ),
+                pair_automaton,
+            )
+        )
         for a in range(alphabet_size + 1)
     ]
 
-    print(len(memo))
+    # TODO: check automata correct, if not then raise k_1 and k_2 and rerun algo
+    return multiplication_automata
 
+
+if __name__ == "__main__":
+    # Free commutative monoid on 2 generators
+    # p = Presentation([0, 1])
+    # presentation.add_rule(p, (0, 1), (1, 0))
+    # wg = WordGraph(2, [[0, 1], [UNDEFINED, 1]])
+    # automaton = Automaton(wg, 0, frozenset({0, 1}))
+
+    # Bicyclic monoid
+    p = Presentation([0, 1])
+    p.contains_empty_word(True)
+    presentation.add_rule(p, (1, 0), ())
+    wg = WordGraph(2, [[0, 1], [UNDEFINED, 1]])
+    automaton = Automaton(wg, 0, frozenset({0, 1}))
+
+    multiplication_automata = run_method(p, automaton)
+
+    # 0 (0, 0) #00ff00 lime green
+    # 1 (0, 1) #ff00ff magenta
+    # 2 (0, $) #007fff blue
+    # 3 (1, 0) #ff7f00 orange
+    # 4 (1, 1) #7fbf7f light green
+    # 5 (1, $) #4604ac dark purple
+    # 6 ($, 0) #de0328 red
+    # 7 ($, 1) #19801d dark green
+    # 8 ($, $) #d881f5 light purple
     dot(multiplication_automata[1].word_graph).view()
     print(multiplication_automata[1].word_graph)
     print(multiplication_automata[1].initial_state)
